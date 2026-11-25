@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Choose the company name</title>
+<style>
+:root{--bg:#eef1f5;--panel:#fff;--ink:#1b2433;--mute:#5d6878;--line:#d3d9e2;--accent:#3d4ce0;--accent-ink:#fff;--good:#1f7a4d;--warn:#b4442c}
+@media (prefers-color-scheme:dark){:root{--bg:#141a26;--panel:#1d2535;--ink:#e8ecf3;--mute:#9aa6b8;--line:#2f3a50;--accent:#8c97ff;--accent-ink:#141a26;--good:#5fd49b;--warn:#ff9a82}}
+*{box-sizing:border-box}
+html{color-scheme:light dark}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:920px;margin:0 auto;padding:32px 20px 64px}
+h1{font:600 2rem/1.15 Georgia,"Times New Roman",serif;margin:0 0 8px}
+h2{font:600 1.2rem/1.3 Georgia,serif;margin:36px 0 10px}
+p{margin:0 0 14px;max-width:62ch}
+.mute{color:var(--mute)}
+button,input{font:inherit;color:inherit}
+button{cursor:pointer;border:1px solid var(--line);background:var(--panel);padding:9px 16px;border-radius:8px}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+input[type=text]{padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel);min-width:240px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:14px 0}
+.done{display:inline-block;padding:2px 10px;border:1px solid var(--good);color:var(--good);border-radius:99px;font-size:.9rem}
+table{border-collapse:collapse;width:100%;background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-weight:600;font-size:.9rem;color:var(--mute)}
+tr:last-child td{border-bottom:0}
+.wrap{overflow-x:auto}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin:6px 0 22px}
+.bar>i{display:block;height:100%;background:var(--accent);transition:width .25s}
+.duel{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.pick{display:flex;flex-direction:column;gap:10px;text-align:left;padding:28px 24px;min-height:230px;border-width:2px;border-radius:14px}
+.pick .nm{font:600 clamp(2rem,6vw,3rem)/1.05 Georgia,serif}
+.pick .nt{color:var(--mute)}
+.pick .hint{margin-top:auto;font-size:.85rem;color:var(--mute)}
+@media(max-width:620px){.duel{grid-template-columns:1fr}.pick{min-height:0}}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<main id="app"></main>
+<script>
+const NAMES=[
+ {n:"Orphera",t:"Existing Steam app \u201cOrphera AI\u201d, but not a limited corp"},
+ {n:"Kyril",t:"Owner of Sunderland. Kyril transport"},
+ {n:"Kairil",t:"Nothing existing. Means good/blessed in Arabic"},
+ {n:"Darna",t:"Comic book character; small business DarnaLounge (shisha)"},
+ {n:"Tomorah",t:"Similar to the Tomora music group, otherwise free"},
+ {n:"Orphux",t:"Nothing existing"},
+ {n:"Kairola",t:"Nothing existing"}
+];
+const FOUNDERS=3, KEY="name-tournament-v1";
+const MAXQ=[0,0,1,3,5,7,10,13,16,19,22][NAMES.length]||"?"; // Ford-Johnson worst case
+const info=n=>NAMES.find(x=>x.n===n);
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const app=document.getElementById("app");
+
+/* ---------- storage ---------- */
+let store=(()=>{try{return JSON.parse(localStorage.getItem(KEY))||{results:{},drafts:{}}}catch(e){return{results:{},drafts:{}}}})();
+store.imported=store.imported||{};
+const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(store))}catch(e){}};
+let shared={}; // lists committed to results/ in the repo
+const key=f=>f.trim().toLowerCase();
+const allResults=()=>({...shared,...store.imported,...store.results});
+
+async function loadShared(){
+ try{
+  const list=await (await fetch("results/manifest.json",{cache:"no-store"})).json();
+  for(const f of list){
+   try{addResult(shared,await (await fetch("results/"+encodeURIComponent(f),{cache:"no-store"})).json())}catch(e){}
+  }
+ }catch(e){}
+}
+const current=r=>({...r,ranking:[...new Set(r.ranking.filter(n=>NAMES.some(x=>x.n===n)))]});
+const missing=r=>NAMES.map(x=>x.n).filter(n=>!r.ranking.includes(n));
+const isComplete=r=>missing(r).length===0;
+const completeResults=()=>Object.values(allResults()).filter(isComplete);
+function addResult(target,o){
+ if(!o||!o.founder||!Array.isArray(o.ranking))return false;
+ const r=current(o);
+ if(!r.ranking.length)return false;
+ target[key(o.founder)]={founder:o.founder,ranking:r.ranking,finished:o.finished||""};
+ return true;
+}
+for(const t of [store.results,store.imported])for(const k in t)t[k]=current(t[k]); // drop removed names
+save();
+
+/* ---------- merge-insertion (Ford-Johnson) sort ----------
+   Fewest possible comparisons for small lists: 13 for 7 names.
+   better(a,b) resolves true if a is preferred. Returns worst-first. */
+async function fj(items,better){
+ const n=items.length; if(n<2)return items;
+ const partner=new Map(), winners=[];
+ for(let i=0;i+1<n;i+=2){
+  const a=items[i],b=items[i+1];
+  const [w,l]=(await better(a,b))?[a,b]:[b,a];
+  partner.set(w,l); winners.push(w);
+ }
+ const chain=await fj(winners,better);
+ const bs=chain.map(w=>({x:partner.get(w),a:w}));
+ if(n%2)bs.push({x:items[n-1],a:null});
+ chain.unshift(bs[0].x);
+ let lo=1,hi=3;
+ while(lo<bs.length){
+  for(let k=Math.min(hi,bs.length);k>lo;k--){
+   const {x,a}=bs[k-1];
+   let l=0,h=a===null?chain.length:chain.indexOf(a);
+   while(l<h){const m=(l+h)>>1; if(await better(x,chain[m]))l=m+1; else h=m;}
+   chain.splice(l,0,x);
+  }
+  const nh=hi+2*lo; lo=hi; hi=nh;
+ }
+ return chain;
+}
+
+/* Adds names to an existing best-first ranking by binary search: about 3 picks per new name. */
+async function insertAll(r,toAdd,better){
+ for(const x of toAdd){
+  let lo=0,hi=r.length;
+  while(lo<hi){const m=(lo+hi)>>1; if(await better(x,r[m]))hi=m; else lo=m+1;}
+  r.splice(lo,0,x);
+ }
+ return r;
+}
+
+/* ---------- tournament runner (answers are replayed, so undo is simple) ---------- */
+let cur=null,pending=null,runId=0,lastFounder="";
+function shuffle(a){a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
+
+function validDraft(d){
+ const all=NAMES.map(x=>x.n).sort().join("|");
+ return d&&(d.base?[...d.base,...d.toAdd]:d.order||[]).slice().sort().join("|")===all;
+}
+function begin(founder){
+ const k=key(founder), ex=store.results[k];
+ lastFounder=founder; store.me=founder;
+ if(!validDraft(store.drafts[k]))delete store.drafts[k];
+ if(!store.drafts[k]){
+  store.drafts[k]=ex&&!isComplete(ex)
+   ?{founder,base:ex.ranking.slice(),toAdd:shuffle(missing(ex)),answers:[]}
+   :{founder,order:shuffle(NAMES.map(x=>x.n)),answers:[]};
+ }
+ cur=store.drafts[k]; cur.founder=founder; save(); run();
+}
+const curMax=()=>{
+ if(!cur.base)return MAXQ;
+ let n=cur.base.length,t=0;
+ for(let i=0;i<cur.toAdd.length;i++){t+=Math.ceil(Math.log2(n+1));n++}
+ return t;
+};
+async function run(){
+ const id=++runId; let i=0;
+ const better=(a,b)=>new Promise(res=>{
+  if(i<cur.answers.length){res(cur.answers[i++]);return}
+  if(id!==runId)return;
+  i++; pending={a,b,res}; showDuel(a,b,i);
+ });
+ const ranking=cur.base
+  ?await insertAll(cur.base.slice(),cur.toAdd,better)
+  :(await fj(cur.order.slice(),better)).reverse();
+ if(id!==runId)return;
+ store.results[key(cur.founder)]={founder:cur.founder,ranking,finished:new Date().toISOString()};
+ delete store.drafts[key(cur.founder)]; save(); cur=null;
+ showResults();
+}
+function answer(v){if(!pending)return;const p=pending;pending=null;cur.answers.push(v);save();p.res(v)}
+function undo(){if(!cur||!cur.answers.length)return;cur.answers.pop();save();pending=null;run()}
+
+/* ---------- views ---------- */
+function card(x,side){
+ return `<button class="pick" data-side="${side}" aria-label="Prefer ${esc(x.n)}">
+  <span class="nm">${esc(x.n)}</span>
+  <span class="nt">${esc(x.t)}</span>
+  <span class="hint">${side?"Press \u2192":"Press \u2190"}</span></button>`;
+}
+function showDuel(a,b,q){
+ const pct=Math.round((q-1)/curMax()*100);
+ app.innerHTML=`
+  <h1>Which name is better?</h1>
+  <p class="mute">${esc(cur.founder)}, ${cur.base?"Adding new names. ":""}Pairing ${q} of at most ${curMax()}. Your progress saves as you go.</p>
+  <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><i style="width:${pct}%"></i></div>
+  <div class="duel">${card(info(a),0)}${card(info(b),1)}</div>
+  <div class="row"><button id="undo" ${cur.answers.length?"":"disabled"}>Undo last pick</button><button id="leave">Save and leave</button></div>`;
+ app.querySelectorAll(".pick").forEach(b=>b.onclick=()=>answer(b.dataset.side==="0"));
+ document.getElementById("undo").onclick=undo;
+ document.getElementById("leave").onclick=()=>{runId++;pending=null;cur=null;showStart()};
+}
+document.addEventListener("keydown",e=>{
+ if(!pending||e.target.tagName==="INPUT")return;
+ if(e.key==="ArrowLeft")answer(true); else if(e.key==="ArrowRight")answer(false);
+});
+
+function showStart(){
+ const res=allResults(), n=completeResults().length;
+ app.innerHTML=`
+  <h1>Choose the company name</h1>
+  <p>Each founder ranks all ${NAMES.length} names by picking a winner in head-to-head pairings. It takes at most ${MAXQ} picks. When all ${FOUNDERS} of you are done, the combined ranking appears under Results.</p>
+  <div class="row">
+   <input type="text" id="who" placeholder="Your name" autocomplete="given-name" aria-label="Your name">
+   <button class="primary" id="go">Start ranking</button>
+   <button id="res">Results (${n} of ${FOUNDERS} done)</button>
+  </div>
+  <p id="msg" class="mute"></p>
+  <p>${Object.values(res).map(r=>isComplete(r)?`<span class="done">${esc(r.founder)} is done</span>`:`<span class="done" style="border-color:var(--warn);color:var(--warn)">${esc(r.founder)}: ${missing(r).length} new name${missing(r).length===1?"":"s"} to add</span>`).join(" ")}</p>
+  <h2>The shortlist</h2>
+  <div class="wrap"><table><thead><tr><th>Name</th><th>Considerations</th></tr></thead><tbody>
+  ${NAMES.map(x=>`<tr><td><strong>${esc(x.n)}</strong></td><td>${esc(x.t)}</td></tr>`).join("")}
+  </tbody></table></div>`;
+ const who=document.getElementById("who"); who.value=lastFounder;
+ const go=()=>{
+  const f=who.value.trim(), k=key(f);
+  if(!f){document.getElementById("msg").textContent="Enter your name first.";who.focus();return}
+  const ex=store.results[k];
+  if(ex&&isComplete(ex)){
+   if(!confirm(f+" has already finished. Rank again and replace the saved list?"))return;
+   delete store.drafts[k];
+  }
+  begin(f);
+ };
+ const lab=()=>{const ex=store.results[key(who.value)],m=ex?missing(ex).length:0;
+  document.getElementById("go").textContent=!ex?"Start ranking":m?`Add ${m} new name${m===1?"":"s"}`:"Rank again"};
+ who.oninput=lab; lab();
+ document.getElementById("go").onclick=go;
+ who.onkeydown=e=>{if(e.key==="Enter")go()};
+ document.getElementById("res").onclick=()=>showResults();
+}
+
+function showResults(justDone){
+ const all=Object.values(allResults()), res=all.filter(isComplete), stale=all.length-res.length, N=NAMES.length;
+ const rank=(r,n)=>r.ranking.indexOf(n)+1;
+ const rows=NAMES.map(x=>{
+  const ranks=res.map(r=>rank(r,x.n));
+  return {x,ranks,pts:ranks.reduce((s,v)=>s+(N+1-v),0),avg:ranks.length?ranks.reduce((s,v)=>s+v,0)/ranks.length:0};
+ }).sort((a,b)=>b.pts-a.pts||a.avg-b.avg);
+ const waiting=FOUNDERS-res.length, revealed=waiting<=0;
+ const mine=store.results[key(store.me||"")];
+ const blind=`<h2>Your ranking</h2>${mine?`<ol>${mine.ranking.map(n=>`<li>${esc(n)}</li>`).join("")}</ol>${isComplete(mine)?"":`<p>This list is missing ${missing(mine).length} newly added name${missing(mine).length===1?"":"s"}. Go back and choose Add new names; it only takes a few picks.</p>`}`:`<p>You haven\u2019t finished ranking yet.</p>`}<p>The combined ranking and everyone else\u2019s lists stay hidden until all ${FOUNDERS} founders have finished, so nobody\u2019s picks are influenced by anyone else\u2019s.</p>`;
+ app.innerHTML=`
+  <h1>Results</h1>
+  <p class="mute">${res.length} of ${FOUNDERS} founders have finished.${stale?` ${stale} saved list${stale===1?" is":"s are"} missing newly added names and ${stale===1?"doesn\u2019t":"don\u2019t"} count yet.`:""}${revealed?` Everyone is in. The combined ranking gives ${N} points for a first place down to 1 for last.`:` Waiting on ${waiting} more.`}</p>
+  ${!revealed?blind:`<div class="wrap"><table><thead><tr><th>Combined</th><th>Name</th><th class="num">Points</th>${res.map(r=>`<th class="num">${esc(r.founder)}</th>`).join("")}<th>Considerations</th></tr></thead><tbody>
+  ${rows.map((r,i)=>`<tr><td>${i+1}</td><td><strong>${esc(r.x.n)}</strong></td><td class="num">${r.pts}</td>${r.ranks.map(v=>`<td class="num">${v}</td>`).join("")}<td>${esc(r.x.t)}</td></tr>`).join("")}
+  </tbody></table></div>`}
+  <h2>Save and share</h2>
+  <p>Your list is stored in this browser. To share it, download the file, then either send it to a cofounder or add it to the <code>results</code> folder in the repo (see the README).</p>
+  <div class="row">
+   ${Object.values(store.results).map(r=>`<button data-dl="${esc(key(r.founder))}">Download ${esc(r.founder)}\u2019s list</button>`).join("")}
+   <button id="imp">Import lists</button>
+   <input type="file" id="file" accept=".json,application/json" multiple class="hidden">
+   <button id="back">Back</button>
+  </div>
+  <p id="msg" class="mute" role="status"></p>`;
+ app.querySelectorAll("[data-dl]").forEach(b=>b.onclick=()=>{
+  const r=store.results[b.dataset.dl];
+  const blob=new Blob([JSON.stringify(r,null,2)],{type:"application/json"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download=key(r.founder).replace(/[^a-z0-9]+/g,"-")+".json"; a.click(); URL.revokeObjectURL(a.href);
+ });
+ const file=document.getElementById("file");
+ document.getElementById("imp").onclick=()=>file.click();
+ file.onchange=async()=>{
+  let ok=0,bad=0;
+  for(const f of file.files){try{addResult(store.imported,JSON.parse(await f.text()))?ok++:bad++}catch(e){bad++}}
+  save(); showResults();
+  document.getElementById("msg").textContent=`Imported ${ok} list${ok===1?"":"s"}${bad?`; ${bad} file${bad===1?" was":"s were"} not a valid list for these names`:""}.`;
+ };
+ document.getElementById("back").onclick=showStart;
+}
+
+showStart();
+loadShared().then(()=>{const w=document.getElementById("who");if(!cur&&w&&!w.value)showStart()});
+</script>
+</body>
+</html>
